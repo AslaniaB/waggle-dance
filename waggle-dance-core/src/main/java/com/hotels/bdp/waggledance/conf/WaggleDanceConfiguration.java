@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2019 Expedia, Inc.
+ * Copyright (C) 2016-2021 Expedia, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ public class WaggleDanceConfiguration {
   private boolean verbose;
   private @Min(1) int disconnectConnectionDelay = 5;
   private @NotNull TimeUnit disconnectTimeUnit = TimeUnit.MINUTES;
+  private @Min(1) int disconnectConnectionThreads = 1;
   private Map<String, String> configurationProperties;
   private @NotNull DatabaseResolution databaseResolution = DatabaseResolution.MANUAL;
 
@@ -78,6 +79,14 @@ public class WaggleDanceConfiguration {
 
   public void setDisconnectTimeUnit(TimeUnit disconnectTimeUnit) {
     this.disconnectTimeUnit = disconnectTimeUnit;
+  }
+
+  public int getDisconnectConnectionThreads() {
+    return disconnectConnectionThreads;
+  }
+
+  public void setDisconnectConnectionThreads(int disconnectConnectionThreads) {
+    this.disconnectConnectionThreads = disconnectConnectionThreads;
   }
 
   public Map<String, String> getConfigurationProperties() {

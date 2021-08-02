@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2019 Expedia, Inc.
+ * Copyright (C) 2016-2021 Expedia, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,9 @@ package com.hotels.bdp.waggledance.server;
 
 import java.io.Closeable;
 import java.util.Iterator;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 
 import javax.annotation.PreDestroy;
@@ -31,6 +32,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Lists;
 
 import com.hotels.bdp.waggledance.conf.WaggleDanceConfiguration;
 
@@ -49,50 +51,95 @@ public class TTransportMonitor {
     }
   }
 
-  private final ScheduledExecutorService scheduler;
-  private final ConcurrentLinkedQueue<ActionContainer> transports = new ConcurrentLinkedQueue<>();
+  private final ScheduledExecutorService monitorScheduler;
+
+  private final ScheduledExecutorService cleanerScheduler;
+  private final List<ActionContainer> todoActionContainerList = Lists.newLinkedList();
+  private final LinkedBlockingQueue<ActionContainer> addonQueue = new LinkedBlockingQueue<>();
+  private final LinkedBlockingQueue<ActionContainer> toCloseQueue = new LinkedBlockingQueue<>();
 
   @Autowired
   public TTransportMonitor(WaggleDanceConfiguration waggleDanceConfiguration) {
-    this(waggleDanceConfiguration, Executors.newScheduledThreadPool(1));
+    this(waggleDanceConfiguration,
+      Executors.newScheduledThreadPool(1),
+      Executors.newScheduledThreadPool(waggleDanceConfiguration.getDisconnectConnectionThreads()));
   }
 
   @VisibleForTesting
-  TTransportMonitor(WaggleDanceConfiguration waggleDanceConfiguration, ScheduledExecutorService scheduler) {
-    this.scheduler = scheduler;
+  TTransportMonitor(WaggleDanceConfiguration waggleDanceConfiguration,
+                    ScheduledExecutorService monitorScheduler,
+                    ScheduledExecutorService cleanerScheduler) {
+    this.monitorScheduler = monitorScheduler;
+    this.cleanerScheduler = cleanerScheduler;
     Runnable monitor = () -> {
-      LOG.debug("Releasing disconnected sessions");
-      Iterator<ActionContainer> iterator = transports.iterator();
-      while (iterator.hasNext()) {
-        ActionContainer actionContainer = iterator.next();
-        if (actionContainer.transport.peek()) {
-          continue;
+      LOG.debug("Checking disconnected sessions");
+      ActionContainer actionContainer;
+      try {
+        // Traversal the todoActionContainerList within a single thread to avoid the concurrent problem.
+        Iterator<ActionContainer> iterator = todoActionContainerList.iterator();
+        while (iterator.hasNext()) {
+          actionContainer = iterator.next();
+          // Move those closed to the toDestroyQueue
+          if (!actionContainer.transport.peek()) {
+            toCloseQueue.add(actionContainer);
+            iterator.remove();
+          }
         }
-        try {
-          actionContainer.action.close();
-        } catch (Exception e) {
-          LOG.warn("Error closing action", e);
+
+        while ((actionContainer = addonQueue.poll()) != null) {
+          if (actionContainer.transport.peek()) {
+            todoActionContainerList.add(actionContainer);
+          } else {
+            toCloseQueue.add(actionContainer);
+          }
         }
-        try {
-          actionContainer.transport.close();
-        } catch (Exception e) {
-          LOG.warn("Error closing transport", e);
-        }
-        iterator.remove();
+      } catch (Exception e) {
+        LOG.error("Error checking the disconnected sessions.");
+      } finally {
+        LOG.debug("Size of remaining session to check is " + todoActionContainerList.size() +
+          ", size of session to clean is " + toCloseQueue.size());
       }
     };
-    this.scheduler
+    this.monitorScheduler
         .scheduleAtFixedRate(monitor, waggleDanceConfiguration.getDisconnectConnectionDelay(),
             waggleDanceConfiguration.getDisconnectConnectionDelay(), waggleDanceConfiguration.getDisconnectTimeUnit());
+
+    // Clean the closed transport and its underlying resources.
+    for (int i = 0; i < waggleDanceConfiguration.getDisconnectConnectionThreads(); i++) {
+      Runnable cleaner = () -> {
+        ActionContainer actionContainer = null;
+        while ((actionContainer = toCloseQueue.poll()) != null) {
+          try {
+            actionContainer.transport.close();
+          } catch (Exception e) {
+            LOG.warn("Error closing transport", e);
+          }
+
+          try {
+            actionContainer.action.close();
+          } catch (Exception e) {
+            LOG.warn("Error closing action", e);
+          }
+          int queueSize = toCloseQueue.size();
+          if (queueSize != 0 && queueSize % 1000 == 0) {
+            LOG.debug("Remaining sessions to be cleaned count " + queueSize);
+          }
+        }
+      };
+
+      this.cleanerScheduler.scheduleAtFixedRate(cleaner, waggleDanceConfiguration.getDisconnectConnectionDelay(), waggleDanceConfiguration.getDisconnectConnectionDelay(),
+        waggleDanceConfiguration.getDisconnectTimeUnit());
+    }
   }
 
   @PreDestroy
   public void shutdown() {
-    scheduler.shutdown();
+    monitorScheduler.shutdown();
+    cleanerScheduler.shutdown();
   }
 
   public void monitor(@WillClose TTransport transport, @WillClose Closeable action) {
-    transports.offer(new ActionContainer(transport, action));
+    addonQueue.offer(new ActionContainer(transport, action));
   }
 
 }

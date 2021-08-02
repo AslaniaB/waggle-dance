@@ -17,6 +17,7 @@ package com.hotels.bdp.waggledance.client;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.lang.reflect.Executable;
 import java.net.URI;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
@@ -222,10 +223,15 @@ class ThriftMetastoreClientManager implements Closeable {
     }
     // Transport would have got closed via client.shutdown(), so we don't need this, but
     // just in case, we make this call.
-    if ((transport != null) && transport.isOpen()) {
-      transport.close();
-      transport = null;
+    try {
+      if ((transport != null) && transport.isOpen()) {
+        transport.close();
+      }
+    } catch (Exception e) {
     }
+    transport = null;
+    client = null;
+
     LOG.info("Closed a connection to metastore, current connections: " + CONN_COUNT.decrementAndGet());
   }
 

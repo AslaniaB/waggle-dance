@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2020 Expedia, Inc.
+ * Copyright (C) 2016-2021 Expedia, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.Closeable;
+import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -51,7 +52,8 @@ public class TTransportMonitorTest {
   private @Mock WaggleDanceConfiguration waggleDanceConfiguration;
   private @Mock TTransport transport;
   private @Mock Closeable action;
-  private @Mock ScheduledExecutorService scheduler;
+  private @Mock ScheduledExecutorService monitorScheduler;
+  private @Mock ScheduledExecutorService cleanerScheduler;
 
   private TTransportMonitor monitor;
 
@@ -59,21 +61,27 @@ public class TTransportMonitorTest {
   public void init() {
     when(waggleDanceConfiguration.getDisconnectConnectionDelay()).thenReturn((int) DEFAULT_DELAY);
     when(waggleDanceConfiguration.getDisconnectTimeUnit()).thenReturn(MILLISECONDS);
-    monitor = new TTransportMonitor(waggleDanceConfiguration, scheduler);
-    verify(scheduler).scheduleAtFixedRate(runnableCaptor.capture(), anyLong(), anyLong(), any(TimeUnit.class));
+    when(waggleDanceConfiguration.getDisconnectConnectionThreads()).thenReturn(1);
+    monitor = new TTransportMonitor(waggleDanceConfiguration, monitorScheduler, cleanerScheduler);
+    verify(monitorScheduler).scheduleAtFixedRate(runnableCaptor.capture(), anyLong(), anyLong(), any(TimeUnit.class));
+    verify(cleanerScheduler).scheduleAtFixedRate(runnableCaptor.capture(), anyLong(), anyLong(), any(TimeUnit.class));
   }
 
   @Test
   public void initialization() throws Exception {
-    assertThat(runnableCaptor.getValue(), is(notNullValue()));
-    verify(scheduler).scheduleAtFixedRate(runnableCaptor.getValue(), DEFAULT_DELAY, DEFAULT_DELAY, MILLISECONDS);
+    List<Runnable> runnableList = runnableCaptor.getAllValues();
+    assertThat(runnableList, is(notNullValue()));
+    verify(monitorScheduler).scheduleAtFixedRate(runnableList.get(0), DEFAULT_DELAY, DEFAULT_DELAY, MILLISECONDS);
+    verify(cleanerScheduler).scheduleAtFixedRate(runnableList.get(1), DEFAULT_DELAY, DEFAULT_DELAY, MILLISECONDS);
   }
 
   @Test
   public void shouldNotDisconnect() throws Exception {
     when(transport.peek()).thenReturn(true);
     monitor.monitor(transport, action);
-    runnableCaptor.getValue().run();
+    for (Runnable runnable : runnableCaptor.getAllValues()) {
+        runnable.run();
+    }
     verify(transport, never()).close();
     verify(action, never()).close();
   }
@@ -82,7 +90,9 @@ public class TTransportMonitorTest {
   public void shouldDisconnect() throws Exception {
     when(transport.peek()).thenReturn(false);
     monitor.monitor(transport, action);
-    runnableCaptor.getValue().run();
+    for (Runnable runnable : runnableCaptor.getAllValues()) {
+      runnable.run();
+    }
     verify(transport).close();
     verify(action).close();
   }
@@ -92,7 +102,9 @@ public class TTransportMonitorTest {
     when(transport.peek()).thenReturn(false);
     doThrow(new RuntimeException()).when(transport).close();
     monitor.monitor(transport, action);
-    runnableCaptor.getValue().run();
+    for (Runnable runnable : runnableCaptor.getAllValues()) {
+      runnable.run();
+    }
     verify(transport).close();
     verify(action).close();
   }
@@ -102,7 +114,9 @@ public class TTransportMonitorTest {
     when(transport.peek()).thenReturn(false);
     doThrow(new RuntimeException()).when(action).close();
     monitor.monitor(transport, action);
-    runnableCaptor.getValue().run();
+    for (Runnable runnable : runnableCaptor.getAllValues()) {
+      runnable.run();
+    }
     verify(transport).close();
     verify(action).close();
   }
