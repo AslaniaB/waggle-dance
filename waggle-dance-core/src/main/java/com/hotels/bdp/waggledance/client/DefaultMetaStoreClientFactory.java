@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2019 Expedia, Inc.
+ * Copyright (C) 2016-2021 Expedia, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Collections;
 
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.thrift.transport.TTransportException;
@@ -26,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
 
 import com.hotels.bdp.waggledance.client.compatibility.HiveCompatibleThriftHiveMetastoreIfaceFactory;
 import com.hotels.hcommon.hive.metastore.exception.MetastoreUnavailableException;
@@ -40,6 +42,7 @@ public class DefaultMetaStoreClientFactory implements MetaStoreClientFactory {
     private final ThriftMetastoreClientManager base;
     private final String name;
     private final int maxRetries;
+    private String userName = null;
 
     private ReconnectingMetastoreClientInvocationHandler(
         String name,
@@ -79,6 +82,13 @@ public class DefaultMetaStoreClientFactory implements MetaStoreClientFactory {
               if (attempt < maxRetries && shouldRetry(method)) {
                 LOG.debug("TTransportException captured in client {}. Reconnecting... ", name);
                 base.reconnect();
+
+                // Auto set_ugi after reconnection
+                if (base.getConf().getBoolVar(HiveConf.ConfVars.METASTORE_EXECUTE_SET_UGI) &&
+                  !Strings.isNullOrEmpty(userName)) {
+                  base.getClient().set_ugi(userName, Collections.emptyList());
+                }
+
                 continue;
               }
               throw new MetastoreUnavailableException("Client " + name + " is not available", realException);
@@ -105,6 +115,12 @@ public class DefaultMetaStoreClientFactory implements MetaStoreClientFactory {
       try {
         if (!base.isOpen()) {
           base.reconnect();
+
+          // Auto set_ugi after reconnection
+          if (base.getConf().getBoolVar(HiveConf.ConfVars.METASTORE_EXECUTE_SET_UGI) &&
+            !Strings.isNullOrEmpty(userName)) {
+            base.getClient().set_ugi(userName, Collections.emptyList());
+          }
         }
       } catch (Exception e) {
         throw new MetastoreUnavailableException("Client " + name + " is not available", e);

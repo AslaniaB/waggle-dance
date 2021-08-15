@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2020 Expedia, Inc.
+ * Copyright (C) 2016-2021 Expedia, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.ThriftHiveMetastore.Iface;
 import org.apache.thrift.TException;
 import org.apache.thrift.transport.TTransportException;
@@ -37,6 +38,7 @@ public class DefaultMetaStoreClientFactoryTest {
 
   private @Mock ThriftMetastoreClientManager base;
   private @Mock Iface client;
+  private @Mock HiveConf hiveconf;
 
   private final DefaultMetaStoreClientFactory factory = new DefaultMetaStoreClientFactory();
   private final static int RECONNECTION_RETRIES = 1;
@@ -55,6 +57,7 @@ public class DefaultMetaStoreClientFactoryTest {
   @Test
   public void isOpenWithReconnection() {
     when(base.isOpen()).thenReturn(false).thenReturn(true);
+    when(base.getConf()).thenReturn(hiveconf);
 
     CloseableThriftHiveMetastoreIface iface = factory.newInstance("name", RECONNECTION_RETRIES, base);
 
@@ -95,6 +98,8 @@ public class DefaultMetaStoreClientFactoryTest {
   @Test
   public void defaultMethodCallThrowsTransportExceptionRetries() throws TException {
     when(base.getClient()).thenReturn(client);
+    when(base.getConf()).thenReturn(hiveconf);
+    when(hiveconf.getBoolVar(HiveConf.ConfVars.METASTORE_EXECUTE_SET_UGI)).thenReturn(false);
     when(client.getName()).thenThrow(new TTransportException()).thenReturn("ourName");
 
     CloseableThriftHiveMetastoreIface iface = factory.newInstance("name", RECONNECTION_RETRIES, base);
